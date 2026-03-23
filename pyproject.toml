@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codesearch"
+version = "0.1.0"
+description = "Structure-aware code retrieval and MCP server for undocumented C codebases"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "torch>=2.2",
+    "sentence-transformers>=3.0",
+    "tree-sitter>=0.23",
+    "tree-sitter-c>=0.23",
+    "mcp>=2.0",
+    "numpy>=1.24",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+codesearch = "codesearch.cli:main"
+
+[tool.setuptools]
+packages = ["codesearch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
