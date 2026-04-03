@@ -96,3 +96,29 @@ def test_callees_of(index, name, expected):
     assert data["relation"] == "callees"
     (m,) = data["matches"]
     assert [r["name"] for r in m["related"]] == expected
+
+
+def test_stdio_server_subprocess(index, tmp_path, fixture_root):
+    """The `serve` command speaks MCP over stdio, as an agent would launch it."""
+    import sys
+    from pathlib import Path
+
+    from mcp import StdioServerParameters
+
+    index.save(tmp_path / "idx")
+    root = Path(__file__).resolve().parent.parent
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "codesearch.cli", "serve", str(fixture_root), "--index-dir", str(tmp_path / "idx")],
+        cwd=str(root),
+    )
+
+    async def run():
+        async with Client(params) as client:
+            tools = await client.list_tools()
+            res = await client.call_tool("callers_of", {"name": "parse_line"})
+            return {t.name for t in tools.tools}, res
+
+    names, res = anyio.run(run)
+    assert names == TOOLS
+    assert [r["id"] for r in payload(res)["matches"][0]["related"]] == ["src/main.c::load_config"]
