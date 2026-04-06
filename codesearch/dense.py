@@ -7,7 +7,7 @@ from functools import lru_cache
 
 import numpy as np
 
-DEFAULT_MODEL = os.environ.get("CODESEARCH_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+DEFAULT_MODEL = os.environ.get("CODESEARCH_MODEL", "BAAI/bge-small-en-v1.5")
 
 # Some retrieval models expect an instruction in front of queries.
 QUERY_PREFIXES = {
