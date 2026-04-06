@@ -62,7 +62,11 @@ def _cmd_bench(args) -> int:
         res = evaluate_repo(path, name=name, model_name=args.model)
         res.source = source
         results.append(res)
-    text = write_report(results, args.model)
+    ablations = {}
+    for extra in args.ablation_model or []:
+        print(f"[bench] ablation with {extra}", file=sys.stderr)
+        ablations[extra] = [evaluate_repo(path, name=name, model_name=extra) for name, path, _ in targets]
+    text = write_report(results, args.model, ablations)
     out = Path(args.out)
     out.write_text(text)
     print(text)
@@ -112,6 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--repo", action="append", help="benchmark a local directory (repeatable)")
     s.add_argument("--data-dir", help="where pinned repositories are cloned (default: data/repos)")
     s.add_argument("--out", default="RESULTS.md")
+    s.add_argument("--ablation-model", action="append", metavar="MODEL",
+                   help="also evaluate with another embedding model and add a comparison table (repeatable)")
     s.set_defaults(func=_cmd_bench)
 
     s = sub.add_parser("fetch", help="clone the pinned evaluation repositories")
