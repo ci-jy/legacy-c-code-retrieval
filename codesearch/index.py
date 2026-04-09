@@ -23,6 +23,8 @@ FORMAT_VERSION = 1
 
 # How many candidates from each retriever take part in fusion.
 FUSION_DEPTH = 100
+# RRF weight of the dense ranking relative to BM25 (weight 1). Chosen on zlib only; see README.
+DENSE_WEIGHT = 5.0
 
 
 def lexical_text(unit: FunctionUnit, include_comment: bool) -> str:
@@ -45,6 +47,7 @@ class CodeIndex:
         embeddings: np.ndarray | None = None,
         graph_seeds: int = 3,
         graph_weight: float = 0.5,
+        dense_weight: float = DENSE_WEIGHT,
     ):
         self.units = units
         self.root = root
@@ -57,6 +60,7 @@ class CodeIndex:
         self._emb = embeddings
         self.graph_seeds = graph_seeds
         self.graph_weight = graph_weight
+        self.dense_weight = dense_weight
 
     # ---------------------------------------------------------------- building
     @classmethod
@@ -140,7 +144,7 @@ class CodeIndex:
             return dense_scores
         lex = rank_order(bm25_scores)
         den = rank_order(dense_scores)
-        fused = rrf([lex, den], len(self.units), k=RRF_K, depth=FUSION_DEPTH)
+        fused = rrf([lex, den], len(self.units), k=RRF_K, depth=FUSION_DEPTH, weights=[1.0, self.dense_weight])
         if method == "hybrid":
             return fused
         return graph_expand(fused, self._nbr_idx.__getitem__, seeds=self.graph_seeds, weight=self.graph_weight)

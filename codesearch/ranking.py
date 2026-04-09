@@ -15,15 +15,26 @@ def rank_order(scores: np.ndarray) -> list[int]:
     return np.lexsort((np.arange(len(scores)), -scores)).tolist()
 
 
-def rrf(rankings: Sequence[Sequence[int]], n: int, k: int = RRF_K, depth: int | None = None) -> np.ndarray:
-    """Reciprocal-rank fusion: score(d) = sum over rankings of 1 / (k + rank(d)), rank starting at 1.
+def rrf(
+    rankings: Sequence[Sequence[int]],
+    n: int,
+    k: int = RRF_K,
+    depth: int | None = None,
+    weights: Sequence[float] | None = None,
+) -> np.ndarray:
+    """Weighted reciprocal-rank fusion: score(d) = sum_i w_i / (k + rank_i(d)), ranks starting at 1.
 
-    `depth` truncates each ranking before fusing; documents absent from a ranking get nothing from it.
+    `depth` truncates each ranking before fusing; documents absent from a ranking get nothing
+    from it. Weights default to 1 for every ranking (plain RRF).
     """
+    if weights is None:
+        weights = [1.0] * len(rankings)
+    if len(weights) != len(rankings):
+        raise ValueError("need one weight per ranking")
     out = np.zeros(n, dtype=np.float64)
-    for ranking in rankings:
+    for ranking, w in zip(rankings, weights):
         for r, doc in enumerate(ranking[:depth] if depth else ranking, start=1):
-            out[doc] += 1.0 / (k + r)
+            out[doc] += w / (k + r)
     return out
 
 

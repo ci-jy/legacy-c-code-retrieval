@@ -14,7 +14,7 @@ from .evaluate import (
     macro_average,
     markdown_table,
 )
-from .index import FUSION_DEPTH
+from .index import DENSE_WEIGHT, FUSION_DEPTH
 from .ranking import RRF_K
 
 
@@ -36,7 +36,8 @@ def write_report(results: list[RepoResult], model: str,
         f"{MAX_QUERY_WORDS} words. Ranks are over every function in the repository.",
         "",
         f"- Embedding model: `{model}` (CPU, not fine-tuned)",
-        f"- Hybrid: reciprocal-rank fusion (k={RRF_K}) of the top {FUSION_DEPTH} BM25 and dense results",
+        f"- Hybrid: weighted reciprocal-rank fusion (k={RRF_K}; BM25 weight 1, dense weight {DENSE_WEIGHT:g}) "
+        f"of the top {FUSION_DEPTH} BM25 and dense results",
         "- Hybrid + call graph: hybrid, then callers/callees of the top 3 hits are promoted (top 3 kept in place)",
         f"- Python {platform.python_version()}",
         "",

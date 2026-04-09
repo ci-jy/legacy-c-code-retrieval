@@ -28,6 +28,16 @@ def test_rrf_depth_truncates_each_ranking():
     assert rank_order(s) == [0, 2, 1]
 
 
+def test_weighted_rrf_hand_computed():
+    s = rrf([[2, 0, 1], [0, 1, 2]], n=3, k=60, weights=[1.0, 5.0])
+    assert s[0] == pytest.approx(1 / 62 + 5 / 61)
+    assert s[1] == pytest.approx(1 / 63 + 5 / 62)
+    assert s[2] == pytest.approx(1 / 61 + 5 / 63)
+    assert rank_order(s) == [0, 1, 2]
+    with pytest.raises(ValueError):
+        rrf([[0]], n=1, weights=[1.0, 2.0])
+
+
 def test_graph_expand_hand_computed():
     scores = np.array([0.5, 0.4, 0.1, 0.05, 0.0])
     nbrs = {0: [3], 1: [3, 4], 2: [], 3: [0, 1], 4: [1]}

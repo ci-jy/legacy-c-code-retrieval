@@ -20,7 +20,8 @@ def test_hybrid_combines_both_rankings(index):
     fused = index.combine("hybrid", bm, dn)
     np.testing.assert_allclose(fused, index.scores(q, "hybrid"))
     top_bm, top_dn = int(np.argmax(bm)), int(np.argmax(dn))
-    assert fused[top_bm] >= 1 / 61 and fused[top_dn] >= 1 / 61
+    assert fused[top_bm] >= 1 / 61 and fused[top_dn] >= index.dense_weight / 61
+    assert fused.max() <= (1 + index.dense_weight) / 61 + 1e-12
 
 
 def test_unknown_method_rejected(index):
