@@ -10,12 +10,16 @@ index is served to LLM agents through a Model Context Protocol (MCP) server with
 A benchmark harness measures retrieval quality on real open-source C projects pinned to exact
 commits; the latest numbers are in [RESULTS.md](RESULTS.md).
 
-| Method (macro average over Lua, zlib, jq) | Recall@1 | Recall@10 | MRR |
+| Method (macro average over Lua, zlib, jq; 1,014 queries) | Recall@1 | Recall@10 | MRR |
 |---|---:|---:|---:|
 | BM25 baseline | 0.407 | 0.758 | 0.532 |
-| Dense (all-MiniLM-L6-v2) | 0.364 | 0.744 | 0.492 |
-| Hybrid (RRF) | 0.457 | 0.802 | 0.579 |
-| Hybrid + call graph | 0.457 | 0.813 | 0.582 |
+| Dense (bge-small-en-v1.5) | 0.537 | 0.866 | 0.661 |
+| Hybrid (weighted RRF) | 0.546 | 0.878 | 0.667 |
+| Hybrid + call graph | 0.546 | 0.895 | 0.669 |
+
+Hybrid beats the BM25 baseline on MRR on every repository (+0.11 on Lua, +0.16 on zlib, +0.13 on
+jq). The gain over dense retrieval alone is small (+0.008 MRR on average, and on Lua equal-weight
+hybrid is slightly below dense), which the design notes below discuss.
 
 ## Installation
 
@@ -27,7 +31,7 @@ python3 -m pip install -r requirements.txt     # CPU-only PyTorch wheels + the r
 # or: python3 -m pip install -e '.[test]'
 ```
 
-The first run downloads the embedding model (`sentence-transformers/all-MiniLM-L6-v2`, ~90 MB)
+The first run downloads the embedding model (`BAAI/bge-small-en-v1.5`, ~130 MB)
 into the Hugging Face cache; later runs load it from the cache without network access. Use
 `--model NAME` (or the `CODESEARCH_MODEL` environment variable) to choose another
 sentence-transformers model.
@@ -65,9 +69,9 @@ Example (on the test fixture):
 
 ```
 $ python3 -m codesearch.cli query tests/fixtures/mini_c "double the bucket count and rehash" -k 3
- 1. 0.0460  table_resize  src/hash.c:49-71
- 2. 0.0457  table_put  src/hash.c:31-45
- 3. 0.0445  table_free  src/hash.c:83-88
+ 1. 0.1333  table_resize  src/hash.c:49-71
+ 2. 0.1309  table_put  src/hash.c:31-45
+ 3. 0.1307  table_free  src/hash.c:83-88
 ```
 
 ## Connecting the MCP server to an agent
@@ -140,20 +144,29 @@ C keywords, English stop words, numbers and one-character tokens are dropped. Qu
 tokenised the same way, which is what lets "get short string" reach `luaH_getShortStr`.
 
 **Dense index.** The embedding input is the split function name and path, followed by the code,
-so that the most informative part survives the model's 256-token truncation. Vectors are
+so that the most informative part survives the model's 512-token truncation. Queries get the
+model's retrieval instruction prefix. Vectors are
 normalised, so scoring is a single matrix-vector product. Embeddings are stored next to the
 saved index together with a fingerprint of the model and texts.
 
-**Hybrid ranking.** Reciprocal-rank fusion, `score(d) = Σ 1 / (60 + rank_i(d))`, over the top 100
-of each ranking. RRF needs no score calibration between BM25 and cosine similarity, which live on
-unrelated scales.
+**Hybrid ranking.** Weighted reciprocal-rank fusion, `score(d) = Σ w_i / (60 + rank_i(d))`, over
+the top 100 of each ranking, with weight 1 for BM25 and 5 for dense. RRF needs no score
+calibration between BM25 and cosine similarity, which live on unrelated scales. With plain
+(equal-weight) RRF and the bge model, fusion pulled the stronger dense ranking towards the weaker
+BM25 ranking: macro MRR was 0.639, below dense alone (0.661). The dense weight was then chosen on
+zlib only from {1, 1.5, 2, 3, 5, 8, 12, 20} (zlib MRR 0.576 at weight 1, 0.635 at 5, 0.628 at 20);
+on the held-out Lua and jq it moved MRR from 0.575 to 0.590 and from 0.765 to 0.776. In effect
+BM25 now mostly breaks ties and rescues exact-identifier queries. The weight is tied to the
+model: with the weaker `all-MiniLM-L6-v2` (see the ablation in RESULTS.md) the same weight
+over-trusts the dense side and hybrid falls below BM25 on jq.
 
 **Call-graph expansion.** After fusion the top 3 hits ("seeds") keep their positions; every other
 function that calls or is called by a seed gains `0.5 · score(seed) / degree(seed)`. Dividing by
 degree stops hubs such as allocation helpers from flooding the list. An earlier variant that let
 neighbours overtake the seeds cut Recall@1 on zlib from 0.40 to 0.16–0.38 depending on the
-weight, which is why the seeds are protected. Seeds = 3 and weight = 0.5 were chosen on zlib only;
-Lua and jq were not used for tuning.
+weight, which is why the seeds are protected. Seeds = 3 and weight = 0.5 were chosen on zlib only (with the
+MiniLM model); Lua and jq were not used for tuning. On this benchmark the step mostly improves
+Recall@5/10 (macro Recall@10 0.878 to 0.895) and leaves Recall@1 unchanged by construction.
 
 ## Evaluation method
 
@@ -178,7 +191,12 @@ of an exact commit, and the checked-out hash is verified:
 | [jq](https://github.com/jqlang/jq) | jq-1.8.2 | `34f7186b86743a083a589741b6cea95293524108` | MIT |
 
 The repositories are only downloaded for evaluation (into the git-ignored `data/repos/`); none of
-their code is included here. A full run over all three takes about 1.5 minutes on 4 CPU cores.
+their code is included here. A full run over all three takes about 4 minutes on 4 CPU cores, plus
+about 2 minutes for the MiniLM ablation:
+
+```bash
+python3 -m codesearch.cli bench --ablation-model sentence-transformers/all-MiniLM-L6-v2 --out RESULTS.md
+```
 
 ## Tests
 
@@ -215,12 +233,14 @@ The dense tests use the real embedding model, so it must be downloadable or alre
   often reuse its vocabulary, which favours lexical matching; real user questions may be phrased
   differently. Each query has exactly one correct answer, so the call-graph step, which mainly
   surfaces *related* functions, can only gain a little on this metric.
-- **General-purpose embedding model.** `all-MiniLM-L6-v2` was not trained on code and truncates
-  inputs to 256 tokens, so long functions are embedded by their first part only. The model is not
+- **General-purpose embedding model.** `bge-small-en-v1.5` is a small English retrieval model, not
+  a code model, and truncates inputs to 512 tokens, so long functions are embedded by their first
+  part only. The model is not
   fine-tuned.
-- **Graph expansion parameters** were tuned on one repository (zlib) with a small grid.
+- **Fusion and graph expansion parameters** were tuned on one repository (zlib) with small grids;
+  the dense weight in particular depends on the embedding model.
 - **C only**, and indexing is not incremental: any change re-embeds the whole repository
-  (about 30 seconds per thousand functions on 4 cores).
+  (about 80 seconds per thousand functions with bge-small on 4 cores).
 
 ## Third-party software
 
@@ -229,6 +249,7 @@ Built on [tree-sitter](https://tree-sitter.github.io/) and
 [sentence-transformers](https://www.sbert.net/) (Apache-2.0), [PyTorch](https://pytorch.org/)
 (BSD-3-Clause), the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (MIT),
 numpy, pydantic and pytest. The default embedding model is
+[bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) (MIT); the ablation uses
 [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (Apache-2.0).
 No third-party source code is copied into this repository.
 
