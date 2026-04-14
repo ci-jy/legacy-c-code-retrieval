@@ -56,13 +56,20 @@ def build_queries(index: CodeIndex) -> list[Query]:
     """
     by_text: dict[str, list[int]] = {}
     for i, u in enumerate(index.units):
-        words = u.comment.split()
-        if len(words) < MIN_QUERY_WORDS or not tokenize(u.comment):
-            continue
-        if "copyright" in u.comment.lower() or "license" in u.comment.lower():
-            continue
-        by_text.setdefault(" ".join(words[:MAX_QUERY_WORDS]), []).append(i)
+        text = query_text(u.comment)
+        if text:
+            by_text.setdefault(text, []).append(i)
     return [Query(text, ids[0]) for text, ids in by_text.items() if len(ids) == 1]
+
+
+def query_text(comment: str) -> str | None:
+    """The query a cleaned leading comment yields, or None when it is not a usable description."""
+    words = comment.split()
+    if len(words) < MIN_QUERY_WORDS or not tokenize(comment):
+        return None
+    if "copyright" in comment.lower() or "license" in comment.lower():
+        return None
+    return " ".join(words[:MAX_QUERY_WORDS])
 
 
 def metrics(ranks: list[int]) -> MethodResult:
@@ -73,7 +80,8 @@ def metrics(ranks: list[int]) -> MethodResult:
     return MethodResult({k: float((r <= k).mean()) for k in KS}, float((1.0 / r).mean()))
 
 
-def evaluate_index(index: CodeIndex, queries: list[Query], methods=METHODS) -> dict[str, MethodResult]:
+def query_ranks(index: CodeIndex, queries: list[Query], methods=METHODS) -> dict[str, list[int]]:
+    """1-based rank of each query's target under every method."""
     q_emb = index.embedder.encode_queries([q.text for q in queries])
     ranks: dict[str, list[int]] = {m: [] for m in methods}
     for qi, q in enumerate(queries):
@@ -82,6 +90,11 @@ def evaluate_index(index: CodeIndex, queries: list[Query], methods=METHODS) -> d
         for m in methods:
             order = rank_order(index.combine(m, bm, dn))
             ranks[m].append(order.index(q.target) + 1)
+    return ranks
+
+
+def evaluate_index(index: CodeIndex, queries: list[Query], methods=METHODS) -> dict[str, MethodResult]:
+    ranks = query_ranks(index, queries, methods)
     return {m: metrics(ranks[m]) for m in methods}
 
 
