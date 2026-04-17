@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
@@ -14,6 +16,18 @@ QUERY_PREFIXES = {
     "BAAI/bge-small-en-v1.5": "Represent this sentence for searching relevant passages: ",
     "BAAI/bge-base-en-v1.5": "Represent this sentence for searching relevant passages: ",
 }
+
+# Written next to a fine-tuned model; records the base model and the query prefix it was trained with.
+META_FILE = "codesearch.json"
+
+
+def query_prefix(model_name: str) -> str:
+    if model_name in QUERY_PREFIXES:
+        return QUERY_PREFIXES[model_name]
+    meta = Path(model_name) / META_FILE
+    if meta.is_file():
+        return json.loads(meta.read_text()).get("query_prefix", "")
+    return ""
 
 
 @lru_cache(maxsize=4)
@@ -49,7 +63,7 @@ class Embedder:
         return self.encode_queries([query])[0]
 
     def encode_queries(self, queries: list[str]) -> np.ndarray:
-        prefix = QUERY_PREFIXES.get(self.model_name, "")
+        prefix = query_prefix(self.model_name)
         return self._encode([prefix + q for q in queries], False)
 
     def _encode(self, texts: list[str], show_progress: bool) -> np.ndarray:
