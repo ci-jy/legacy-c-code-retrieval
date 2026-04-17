@@ -16,6 +16,11 @@ class PinnedRepo:
     commit: str
     tag: str
     license: str
+    # Sub-directories to read (empty: the whole repository). Used to leave out vendored code.
+    paths: tuple[str, ...] = ()
+
+    def source_dirs(self, root: Path) -> list[Path]:
+        return [root / p for p in self.paths] if self.paths else [root]
 
 
 PINNED_REPOS = (
@@ -24,6 +29,18 @@ PINNED_REPOS = (
                "zlib"),
     PinnedRepo("jq", "https://github.com/jqlang/jq.git", "34f7186b86743a083a589741b6cea95293524108", "jq-1.8.2",
                "MIT"),
+)
+
+
+# Training corpora for fine-tuning the embedding model. They must stay disjoint from
+# PINNED_REPOS: Redis vendors Lua under deps/, so only its own src/ is read.
+TRAINING_REPOS = (
+    PinnedRepo("sqlite", "https://github.com/sqlite/sqlite.git", "262de1bebb0647eb6fa6a2b0434111c7d831a14d",
+               "version-3.47.2", "public domain", ("src",)),
+    PinnedRepo("redis", "https://github.com/redis/redis.git", "a0a6f23d997b024689ba157916837f493a593a34", "7.4.2",
+               "BSD-3-Clause", ("src",)),
+    PinnedRepo("curl", "https://github.com/curl/curl.git", "75a2079d5c28debb2eaa848ca9430f1fe0d7844c",
+               "curl-8_11_1", "curl", ("lib", "src")),
 )
 
 
@@ -53,5 +70,5 @@ def _head(dest: Path) -> str:
         return ""
 
 
-def fetch_all(data_dir: Path = DEFAULT_DATA_DIR) -> dict[str, Path]:
-    return {r.name: fetch(r, data_dir) for r in PINNED_REPOS}
+def fetch_all(data_dir: Path = DEFAULT_DATA_DIR, repos=PINNED_REPOS) -> dict[str, Path]:
+    return {r.name: fetch(r, data_dir) for r in repos}
