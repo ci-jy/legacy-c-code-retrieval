@@ -1,0 +1,26 @@
+# Fine-tuning runs for `codesearch train --run NAME`. [defaults] apply to every run.
+# Sized for a 4-core CPU and ~3 GB of RAM: about 30 minutes per run.
+
+[defaults]
+base_model = "BAAI/bge-small-en-v1.5"
+epochs = 1
+batch_size = 32
+learning_rate = 3e-5
+warmup_ratio = 0.1
+weight_decay = 0.01
+max_seq_length = 128
+scale = 20.0
+seed = 0
+max_train_pairs = 2880
+max_val_pairs = 300
+eval_every = 15
+gradient_checkpointing = true
+
+[runs.hard]
+negatives = "hard"
+
+[runs.random]
+negatives = "random"
+
+[runs.in-batch]
+negatives = "none"
