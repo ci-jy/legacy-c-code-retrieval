@@ -152,7 +152,7 @@ def test_guard_drops_exact_and_near_duplicates_of_benchmark_functions(units):
     comment_copy.comment = resize.comment
     exact = copy.deepcopy(resize)
     exact.comment = "An entirely different description of the same code."
-    candidates = [exact, renamed, comment_copy, *[u for u in units if u.file == "src/strbuf.c"]]
+    candidates = [exact, renamed, comment_copy, *[copy.deepcopy(u) for u in units if u.file == "src/strbuf.c"]]
     for i, u in enumerate(candidates):
         u.id = f"train.c::{u.name}@{i}"
         u.file = "train.c"
