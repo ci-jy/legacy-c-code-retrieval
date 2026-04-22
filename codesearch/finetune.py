@@ -15,12 +15,16 @@ import os
 import random
 import tempfile
 import time
-import tomllib
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import numpy as np
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11
+    import tomli as tomllib
 
 from .dense import DEFAULT_MODEL, META_FILE, query_prefix
 from .mining import TrainingPair
