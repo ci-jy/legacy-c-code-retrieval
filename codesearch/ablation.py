@@ -10,6 +10,7 @@ with the macro averages in the table.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -126,7 +127,7 @@ def run_ablation(models: list[str], data_dir: str | None = None, tracking_dir: s
             path = resolve_model(spec, tracking_dir)
             run_id = Path(path).parent.parent.name
             labels[spec] = f"{spec} ({run_id[:8]})"
-        resolved[spec] = path
+        resolved[spec] = os.path.relpath(path) if os.path.isabs(path) else path
         ranks[spec] = collect_ranks(path, repos, log=log)
     if ranks_out:
         Path(ranks_out).write_text(json.dumps({"models": resolved, "ranks": ranks}))
