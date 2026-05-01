@@ -309,3 +309,5 @@ No third-party source code is copied into this repository.
 ## License
 
 MIT
+
+Project period: 2026-03-23 to 2026-05-01.
