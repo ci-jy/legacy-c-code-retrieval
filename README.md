@@ -10,6 +10,23 @@ index is served to LLM agents through a Model Context Protocol (MCP) server with
 A benchmark harness measures retrieval quality on real open-source C projects pinned to exact
 commits; the latest numbers are in [RESULTS.md](RESULTS.md).
 
+The embedding model can also be fine-tuned on C: `codesearch mine` extracts (leading comment,
+function body) pairs from SQLite, Redis and curl (pinned, disjoint from the benchmark, with
+exact and near-duplicate filtering against every benchmark function), `codesearch train`
+fine-tunes the model contrastively on the CPU and logs the run to a local MLflow store, and
+`codesearch ablation` compares models with paired bootstrap confidence intervals. Any logged
+model can be served with `--model mlflow:best`. Method and results:
+[docs/FINETUNING.md](docs/FINETUNING.md).
+
+| Embedding model, same 1,014 queries | Dense MRR | Hybrid + call graph MRR | ΔMRR vs base, hybrid + graph [95% CI] |
+|---|---:|---:|---:|
+| bge-small-en-v1.5 (base) | 0.661 | 0.669 | — |
+| fine-tuned, random negatives | 0.671 | 0.680 | +0.011 [-0.003, +0.026] |
+| fine-tuned, BM25 hard negatives | 0.675 | 0.687 | +0.019 [+0.004, +0.034] |
+
+The gain is small and uneven: Lua and jq improve while zlib gets slightly worse. For that
+reason the base model stays the default.
+
 | Method (macro average over Lua, zlib, jq; 1,014 queries) | Recall@1 | Recall@10 | MRR |
 |---|---:|---:|---:|
 | BM25 baseline | 0.407 | 0.758 | 0.532 |
@@ -60,7 +77,25 @@ python3 -m codesearch.cli bench --repo path/to/c-project --out my-results.md
 
 # Serve a repository to an MCP client over stdio
 python3 -m codesearch.cli serve path/to/c-project
+
+# Fine-tuning: mine pairs, train (logged to ./mlruns), compare models on the benchmark
+python3 -m codesearch.cli mine                        # -> data/training/pairs_{hard,random}.jsonl
+python3 -m codesearch.cli train --run hard            # runs are defined in configs/finetune.toml
+python3 -m codesearch.cli train --run random
+python3 -m codesearch.cli ablation BAAI/bge-small-en-v1.5 mlflow:best-random mlflow:best-hard \
+    --out docs/ablation.md --ranks-out docs/ablation_ranks.json
+
+# Use a fine-tuned model anywhere a model is accepted
+python3 -m codesearch.cli --model mlflow:best query path/to/c-project "free the hash table"
+python3 -m codesearch.cli --model mlflow:best serve path/to/c-project
 ```
+
+`--model` accepts a Hugging Face model name, a local model directory, or a fine-tuned model from
+the MLflow store: `mlflow:best` (highest final validation MRR), `mlflow:best-hard`,
+`mlflow:best-random` (best run with that negative mode) or `mlflow:<run_id>`. The store is
+`./mlruns` unless `--tracking-dir` or `MLFLOW_TRACKING_URI` says otherwise, and
+`CODESEARCH_MODEL=mlflow:best` makes it the default. Browse runs with `mlflow ui --backend-store-uri ./mlruns`
+(needs the full `mlflow` package).
 
 `query` and `serve` reuse the saved index when the parsed functions and model are unchanged
 and rebuild it otherwise.
@@ -93,6 +128,8 @@ used by Claude Desktop, Claude Code's `.mcp.json`, Cursor and others):
 ```
 
 Index large repositories once with `codesearch index` beforehand so the server starts quickly.
+To serve with a fine-tuned model, add `"--model", "mlflow:best"` before `"serve"` in `args` (and
+index with the same `--model`).
 
 | Tool | Arguments | Returns |
 |---|---|---|
@@ -119,9 +156,13 @@ codesearch/
   index.py       CodeIndex: build/save/load/search over all of the above
   evaluate.py    comment-to-function benchmark and metrics
   report.py      markdown report
-  repos.py       pinned evaluation repositories
+  repos.py       pinned evaluation and training repositories
   mcp_server.py  MCP tools
-  cli.py         index / query / bench / fetch / serve
+  mining.py      training pairs, hard negatives, benchmark leakage guard
+  finetune.py    contrastive fine-tuning, MLflow logging, model selection
+  ablation.py    model comparison with paired bootstrap intervals
+  cli.py         index / query / bench / fetch / serve / mine / train / ablation
+configs/finetune.toml  training runs (hyper-parameters, seeds)
 ```
 
 **Function units.** Every `function_definition` node in `.c` and `.h` files becomes a unit,
@@ -217,7 +258,15 @@ functions, a recursive function, a call through a function pointer, an `#ifdef` 
   comments skipped) and the metrics;
 - the four MCP tools through an in-process MCP client and through a stdio subprocess,
   including schemas, structured results and error cases;
-- the CLI `index`, `query` and `bench` commands.
+- the CLI `index`, `query` and `bench` commands;
+- training-pair mining (drop reasons, per-file train/validation split, random and BM25 hard
+  negatives) and the leakage guard: exact and near-duplicate benchmark code or comments are
+  dropped even under another path, and benchmark repositories are refused as training sources;
+- the paired bootstrap (zero-width intervals for identical systems, exact recovery of a constant
+  shift, macro averaging over repositories, seeding) and the ablation table;
+- a tiny training smoke run on pairs from the fixture: MLflow params, loss and validation curves,
+  the model artefact, repeatability under a fixed seed, `mlflow:` model selection, and the CLI
+  loading the fine-tuned model.
 
 The dense tests use the real embedding model, so it must be downloadable or already cached.
 
@@ -235,8 +284,8 @@ The dense tests use the real embedding model, so it must be downloadable or alre
   surfaces *related* functions, can only gain a little on this metric.
 - **General-purpose embedding model.** `bge-small-en-v1.5` is a small English retrieval model, not
   a code model, and truncates inputs to 512 tokens, so long functions are embedded by their first
-  part only. The model is not
-  fine-tuned.
+  part only. The default stays the base model; fine-tuned models are opt-in (see
+  [docs/FINETUNING.md](docs/FINETUNING.md) for what fine-tuning does and does not gain).
 - **Fusion and graph expansion parameters** were tuned on one repository (zlib) with small grids;
   the dense weight in particular depends on the embedding model.
 - **C only**, and indexing is not incremental: any change re-embeds the whole repository
@@ -248,9 +297,13 @@ Built on [tree-sitter](https://tree-sitter.github.io/) and
 [tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c) (MIT),
 [sentence-transformers](https://www.sbert.net/) (Apache-2.0), [PyTorch](https://pytorch.org/)
 (BSD-3-Clause), the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (MIT),
-numpy, pydantic and pytest. The default embedding model is
+numpy, pydantic, [MLflow](https://mlflow.org/) (Apache-2.0) and pytest. The default embedding model is
 [bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) (MIT); the ablation uses
 [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (Apache-2.0).
+Fine-tuning data is mined from [SQLite](https://sqlite.org/) (public domain),
+[Redis](https://github.com/redis/redis) 7.4.2 (BSD-3-Clause) and [curl](https://curl.se/) (curl
+licence); like the benchmark repositories they are only downloaded into the git-ignored `data/`
+and neither their code nor the mined pairs are committed.
 No third-party source code is copied into this repository.
 
 ## License
