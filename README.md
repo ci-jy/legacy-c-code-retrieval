@@ -1,4 +1,47 @@
-# codesearch: structure-aware code retrieval for undocumented C
+# codesearch: find code by meaning in undocumented C
+
+Search engine for undocumented C codebases, for maintainers and for LLM agents: ask "where are config lines parsed" and get the function, its callers and its callees. Served to agents over the Model Context Protocol (MCP), and runs entirely on the CPU.
+
+## Results
+
+- **Beat BM25 keyword search on all 3 benchmark codebases** (1,014 queries over Lua, zlib and jq): **MRR 0.669 vs 0.532 (+26%)**, recall@10 0.895 vs 0.758.
+- **Fine-tuned the embedding model** (bge-small, PyTorch) with hard negatives on comment-function pairs mined from SQLite, Redis and curl (6,895 mined, leakage-checked against the benchmark), **raising MRR to 0.687**; runs tracked in MLflow.
+- **Fused BM25 and sentence-transformers rankings with a tree-sitter call graph**, and served them to LLM agents through four MCP tools (`search_code`, `get_function`, `callers_of`, `callees_of`), tested through a real stdio client.
+
+```mermaid
+flowchart LR
+    repo[C repository] --> parse[tree-sitter: function units]
+    parse --> graph[Static call graph]
+    parse --> bm25[BM25 index of split identifiers]
+    parse --> dense[Dense index: sentence-transformers]
+    query[Question in plain English] --> bm25
+    query --> dense
+    bm25 --> rrf[Weighted rank fusion]
+    dense --> rrf
+    rrf --> expand[Call-graph expansion]
+    graph --> expand
+    expand --> out[Ranked functions: CLI or MCP server]
+```
+
+**Stack:** Python, PyTorch, sentence-transformers, tree-sitter, Model Context Protocol (MCP Python SDK), MLflow, NumPy, pydantic, pytest
+
+## Quickstart
+
+```bash
+python3 -m pip install -r requirements.txt                                                      # CPU-only PyTorch + the rest
+python3 -m codesearch.cli query tests/fixtures/mini_c "double the bucket count and rehash" -k 3  # search the bundled C fixture
+python3 -m codesearch.cli serve path/to/c-project                                                # MCP server for an agent (stdio)
+```
+
+```
+ 1. 0.1333  table_resize  src/hash.c:49-71
+ 2. 0.1309  table_put  src/hash.c:31-45
+ 3. 0.1307  table_free  src/hash.c:83-88
+```
+
+To reproduce the benchmark: `python3 -m codesearch.cli fetch && python3 -m codesearch.cli bench --out RESULTS.md` (about 4 minutes on 4 cores).
+
+## How it works
 
 `codesearch` finds where a behaviour lives in a C codebase. It splits the code at function
 boundaries with tree-sitter, builds a static call graph, indexes each function both lexically
@@ -9,6 +52,17 @@ index is served to LLM agents through a Model Context Protocol (MCP) server with
 
 A benchmark harness measures retrieval quality on real open-source C projects pinned to exact
 commits; the latest numbers are in [RESULTS.md](RESULTS.md).
+
+| Method (macro average over Lua, zlib, jq; 1,014 queries) | Recall@1 | Recall@10 | MRR |
+|---|---:|---:|---:|
+| BM25 baseline | 0.407 | 0.758 | 0.532 |
+| Dense (bge-small-en-v1.5) | 0.537 | 0.866 | 0.661 |
+| Hybrid (weighted RRF) | 0.546 | 0.878 | 0.667 |
+| Hybrid + call graph | 0.546 | 0.895 | 0.669 |
+
+Hybrid beats the BM25 baseline on MRR on every repository (+0.11 on Lua, +0.16 on zlib, +0.13 on
+jq). The gain over dense retrieval alone is small (+0.008 MRR on average, and on Lua equal-weight
+hybrid is slightly below dense), which the design notes below discuss.
 
 The embedding model can also be fine-tuned on C: `codesearch mine` extracts (leading comment,
 function body) pairs from SQLite, Redis and curl (pinned, disjoint from the benchmark, with
@@ -24,19 +78,7 @@ model can be served with `--model mlflow:best`. Method and results:
 | fine-tuned, random negatives | 0.671 | 0.680 | +0.011 [-0.003, +0.026] |
 | fine-tuned, BM25 hard negatives | 0.675 | 0.687 | +0.019 [+0.004, +0.034] |
 
-The gain is small and uneven: Lua and jq improve while zlib gets slightly worse. For that
-reason the base model stays the default.
-
-| Method (macro average over Lua, zlib, jq; 1,014 queries) | Recall@1 | Recall@10 | MRR |
-|---|---:|---:|---:|
-| BM25 baseline | 0.407 | 0.758 | 0.532 |
-| Dense (bge-small-en-v1.5) | 0.537 | 0.866 | 0.661 |
-| Hybrid (weighted RRF) | 0.546 | 0.878 | 0.667 |
-| Hybrid + call graph | 0.546 | 0.895 | 0.669 |
-
-Hybrid beats the BM25 baseline on MRR on every repository (+0.11 on Lua, +0.16 on zlib, +0.13 on
-jq). The gain over dense retrieval alone is small (+0.008 MRR on average, and on Lua equal-weight
-hybrid is slightly below dense), which the design notes below discuss.
+Fine-tuning helps on Lua and jq and costs a little on zlib, so the base model stays the default and fine-tuned models are opt-in (`--model mlflow:best`).
 
 ## Installation
 
@@ -270,7 +312,26 @@ functions, a recursive function, a call through a function pointer, an `#ifdef` 
 
 The dense tests use the real embedding model, so it must be downloadable or already cached.
 
-## Limitations
+## Third-party software
+
+Built on [tree-sitter](https://tree-sitter.github.io/) and
+[tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c) (MIT),
+[sentence-transformers](https://www.sbert.net/) (Apache-2.0), [PyTorch](https://pytorch.org/)
+(BSD-3-Clause), the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (MIT),
+numpy, pydantic, [MLflow](https://mlflow.org/) (Apache-2.0) and pytest. The default embedding model is
+[bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) (MIT); the ablation uses
+[all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (Apache-2.0).
+Fine-tuning data is mined from [SQLite](https://sqlite.org/) (public domain),
+[Redis](https://github.com/redis/redis) 7.4.2 (BSD-3-Clause) and [curl](https://curl.se/) (curl
+licence); like the benchmark repositories they are only downloaded into the git-ignored `data/`
+and neither their code nor the mined pairs are committed.
+No third-party source code is copied into this repository.
+
+## License
+
+MIT
+
+## Limitations and next steps
 
 - **No preprocessor.** Macros are not expanded, so functions generated by macros are invisible and
   calls hidden inside macros produce no edges. Heavily macro-based code can confuse tree-sitter;
@@ -290,24 +351,5 @@ The dense tests use the real embedding model, so it must be downloadable or alre
   the dense weight in particular depends on the embedding model.
 - **C only**, and indexing is not incremental: any change re-embeds the whole repository
   (about 80 seconds per thousand functions with bge-small on 4 cores).
-
-## Third-party software
-
-Built on [tree-sitter](https://tree-sitter.github.io/) and
-[tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c) (MIT),
-[sentence-transformers](https://www.sbert.net/) (Apache-2.0), [PyTorch](https://pytorch.org/)
-(BSD-3-Clause), the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (MIT),
-numpy, pydantic, [MLflow](https://mlflow.org/) (Apache-2.0) and pytest. The default embedding model is
-[bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) (MIT); the ablation uses
-[all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (Apache-2.0).
-Fine-tuning data is mined from [SQLite](https://sqlite.org/) (public domain),
-[Redis](https://github.com/redis/redis) 7.4.2 (BSD-3-Clause) and [curl](https://curl.se/) (curl
-licence); like the benchmark repositories they are only downloaded into the git-ignored `data/`
-and neither their code nor the mined pairs are committed.
-No third-party source code is copied into this repository.
-
-## License
-
-MIT
 
 Project period: 2026-03-23 to 2026-05-01.
